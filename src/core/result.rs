@@ -1,10 +1,16 @@
-use std::ptr;
 use crate::core::status::OperationStatus;
+use std::ptr;
 
 /// C-ABI compatible result container (RFP-027 F#58, F#61, F#62).
 ///
-/// Encapsulates a pointer to the heap-allocated payload and a typed
-/// status code. The pointer is guaranteed valid only when `status == OperationStatus::Ok`.
+/// Encapsulates a pointer to the heap-allocated payload and a typed status code.
+///
+/// ### Ownership & Null Guarantee:
+/// - When `status == OperationStatus::Ok`, `value` is guaranteed non-null and points to a valid,
+///   heap-allocated payload owned by the caller. The caller is responsible for freeing it with the
+///   type-paired deallocator (e.g. `lez_free_account`, `lez_free_tx_page`, etc.).
+/// - When `status != OperationStatus::Ok`, `value` is strictly guaranteed to be `NULL` (`ptr::null_mut()`).
+///   Callers do not need to free `value` on error and must not dereference it.
 #[repr(C)]
 pub struct PointerResult<T> {
     pub value: *mut T,

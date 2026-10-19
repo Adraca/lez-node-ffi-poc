@@ -1,8 +1,8 @@
-use rocksdb::WriteBatch;
 use crate::core::status::OperationStatus;
 use crate::storage::{
     RocksStore, CF_ACC_META, CF_ACC_TO_TX, CF_BLOCK, CF_HASH_TO_ID, CF_META, CF_STATE, CF_TX_TO_ID,
 };
+use rocksdb::WriteBatch;
 
 /// Populates the RocksDB store with a deterministic set of blocks, txs, and accounts.
 pub fn load_deterministic_fixtures(
@@ -78,6 +78,9 @@ pub fn load_deterministic_fixtures(
         write_batch.put_cf(&cf_meta, b"chain_tip", &tip_val);
     }
 
-    store.db().write(write_batch).map_err(|_| OperationStatus::BackendFailureStorage)?;
+    store
+        .db()
+        .write(write_batch)
+        .map_err(|_| OperationStatus::BackendFailureStorage)?;
     Ok(())
 }

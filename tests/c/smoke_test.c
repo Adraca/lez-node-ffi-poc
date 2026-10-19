@@ -4,11 +4,24 @@
 #include <assert.h>
 #include "../../include/lez_node_ffi.h"
 
+static void dummy_cb(const FfiChainTip *tip, void *user_data) {
+    (void)tip;
+    int *count = (int *)user_data;
+    if (count) {
+        (*count)++;
+    }
+}
+
 int main(void) {
     printf("[c-smoke] Starting C smoke test for lez-node-ffi-poc...\n");
 
     // 1. Test null-safety across all exports (F#64)
-    assert(lez_indexer_create(NULL).status == NullPointer);
+    FfiAbiVersion abi = lez_abi_version();
+    assert(abi.major == LEZ_ABI_VERSION_MAJOR);
+    assert(abi.minor == LEZ_ABI_VERSION_MINOR);
+    assert(lez_indexer_create(NULL, LEZ_ABI_VERSION_MAJOR).status == NullPointer);
+    assert(lez_indexer_create(NULL, 999).status == InvalidArgumentAbiMismatch);
+    assert(lez_indexer_create(NULL, 999).value == NULL);
     assert(lez_query_chain_tip(NULL, NULL).status == NullPointer);
     assert(lez_query_account(NULL, NULL, NULL).status == NullPointer);
     assert(lez_query_account_at_block(NULL, NULL, NULL, 0, NULL).status == NullPointer);
@@ -19,16 +32,23 @@ int main(void) {
     assert(lez_admin_stop_indexer(NULL, NULL) == NullPointer);
     assert(lez_admin_reset_storage(NULL, NULL) == NullPointer);
     assert(lez_admin_grant(NULL, NULL, NULL) == NullPointer);
+    assert(lez_subscribe_finalized_blocks(NULL, NULL, 0, NULL, NULL) == 0);
+    assert(lez_unsubscribe(NULL, NULL, 0) == NullPointer);
+    assert(lez_notify_block_ingest(NULL, 0, NULL, 0) == NullPointer);
 
     // Safe deallocation of NULL pointers
     lez_free_account(NULL);
     lez_free_accounts_batch(NULL);
     lez_free_tx_page(NULL);
-    lez_free_shard(NULL);
     lez_free_chain_tip(NULL);
     lez_free_string(NULL);
     assert(lez_free_cursor(NULL, NULL, NULL) == Ok);
     lez_indexer_free(NULL);
+
+    // Verify PointerResult.value == NULL on error
+    assert(lez_query_chain_tip(NULL, NULL).value == NULL);
+    assert(lez_query_account(NULL, NULL, NULL).value == NULL);
+    assert(lez_query_accounts(NULL, NULL, NULL, 0).value == NULL);
     printf("[c-smoke] Null safety verified across all exports.\n");
 
     // 2. Initialize temporary RocksDB store
@@ -36,7 +56,12 @@ int main(void) {
     char *dir = mkdtemp(temp_dir);
     assert(dir != NULL);
 
-    PointerResult_LezIndexerHandle res = lez_indexer_create(dir);
+    // Verify ABI mismatch rejection on valid directory
+    PointerResult_LezIndexerHandle bad_res = lez_indexer_create(dir, 999);
+    assert(bad_res.status == InvalidArgumentAbiMismatch);
+    assert(bad_res.value == NULL);
+
+    PointerResult_LezIndexerHandle res = lez_indexer_create(dir, LEZ_ABI_VERSION_MAJOR);
     assert(res.status == Ok);
     LezIndexerHandle *indexer = res.value;
     assert(indexer != NULL);
@@ -88,7 +113,27 @@ int main(void) {
     assert(page_res.value != NULL);
     assert(page_res.value->count == 0);
     assert(page_res.value->has_more == false);
+    // Verified free ordering: lez_free_cursor (borrows cursor string) must precede lez_free_tx_page
+    if (page_res.value->next_cursor != NULL) {
+        assert(lez_free_cursor(indexer, caller_user, page_res.value->next_cursor) == Ok);
+    }
     lez_free_tx_page(page_res.value);
+
+    // 8. Test Finalized Block Subscription (F#70)
+    int callback_invocations = 0;
+    uint64_t sub_id = lez_subscribe_finalized_blocks(
+        indexer, caller_user, 0, dummy_cb, &callback_invocations
+    );
+    assert(sub_id > 0);
+
+    uint8_t blk_hash[32];
+    memset(blk_hash, 0x42, 32);
+    assert(lez_notify_block_ingest(indexer, 100, blk_hash, 1234567890) == Ok);
+    assert(callback_invocations == 1);
+
+    // Enforce caller isolation: caller_admin cannot unsubscribe caller_user's sub
+    assert(lez_unsubscribe(indexer, caller_admin, sub_id) == PermissionDenied);
+    assert(lez_unsubscribe(indexer, caller_user, sub_id) == Ok);
 
     // Cleanup
     lez_indexer_free(indexer);

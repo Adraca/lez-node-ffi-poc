@@ -1,9 +1,9 @@
-use std::sync::Arc;
-use std::thread;
-use tempfile::tempdir;
 use lez_node_ffi_poc::core::status::OperationStatus;
 use lez_node_ffi_poc::indexer::LezIndexer;
 use lez_node_ffi_poc::storage::fixture::load_deterministic_fixtures;
+use std::sync::Arc;
+use std::thread;
+use tempfile::tempdir;
 
 #[test]
 fn test_query_chain_tip_and_schema() {
@@ -48,13 +48,17 @@ fn test_query_account_default_zeroed_and_pinned_reads() {
     block_5_hash[0..8].copy_from_slice(&5u64.to_be_bytes());
     block_5_hash[31] = 0xAA;
 
-    let pinned_res = indexer.query_account_at_block(&known_acc, 5, &block_5_hash).unwrap();
+    let pinned_res = indexer
+        .query_account_at_block(&known_acc, 5, &block_5_hash)
+        .unwrap();
     assert_eq!(pinned_res.nonce, 10);
     assert_eq!(pinned_res.balance, 1000 + 5 * 10);
 
     // Invalid hash pin rejected (F#11)
     let bad_hash = [0xFFu8; 32];
-    let err = indexer.query_account_at_block(&known_acc, 5, &bad_hash).unwrap_err();
+    let err = indexer
+        .query_account_at_block(&known_acc, 5, &bad_hash)
+        .unwrap_err();
     assert_eq!(err, OperationStatus::InvalidArgumentBlockPin);
 }
 
@@ -93,12 +97,17 @@ fn test_query_transactions_stable_under_concurrent_ingestion() {
     load_deterministic_fixtures(&indexer.store, 10, &[acc]).unwrap();
 
     // Fetch Page 1 (limit = 10, oldest_first = true)
-    let page1 = indexer.query_transactions_by_account(&caller, &acc, None, 10, true).unwrap();
+    let page1 = indexer
+        .query_transactions_by_account(&caller, &acc, None, 10, true)
+        .unwrap();
     assert_eq!(page1.count, 10);
     assert!(page1.has_more);
     assert!(!page1.next_cursor.is_null());
 
-    let cursor_token = unsafe { std::ffi::CStr::from_ptr(page1.next_cursor) }.to_str().unwrap().to_owned();
+    let cursor_token = unsafe { std::ffi::CStr::from_ptr(page1.next_cursor) }
+        .to_str()
+        .unwrap()
+        .to_owned();
 
     // Concurrent ingestion: Writer adds 10 more blocks (20 more transactions for this account)
     let indexer_clone = Arc::clone(&indexer);
@@ -113,7 +122,9 @@ fn test_query_transactions_stable_under_concurrent_ingestion() {
     assert_eq!(new_tip.height, 20);
 
     // Fetch Page 2 using cursor: MUST stay pinned to initial snapshot (20 txs total, not 40!)
-    let page2 = indexer.query_transactions_by_account(&caller, &acc, Some(&cursor_token), 10, true).unwrap();
+    let page2 = indexer
+        .query_transactions_by_account(&caller, &acc, Some(&cursor_token), 10, true)
+        .unwrap();
     assert_eq!(page2.count, 10);
     assert!(!page2.has_more); // Snapshot boundary respected: finished the 20 items from snapshot!
 }

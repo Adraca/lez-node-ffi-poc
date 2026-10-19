@@ -14,6 +14,8 @@ include = [
     "FfiChainTip",
     "FfiTxDigest",
     "FfiTxPage",
+    "FfiAbiVersion",
+    "FfiBlockCallback",
     "LezIndexerHandle",
 ]
 

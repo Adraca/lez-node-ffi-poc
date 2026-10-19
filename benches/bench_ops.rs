@@ -1,7 +1,7 @@
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
-use tempfile::tempdir;
 use lez_node_ffi_poc::indexer::LezIndexer;
 use lez_node_ffi_poc::storage::fixture::load_deterministic_fixtures;
+use tempfile::tempdir;
 
 fn bench_accounts(c: &mut Criterion) {
     let dir = tempdir().unwrap();
@@ -27,11 +27,15 @@ fn bench_accounts(c: &mut Criterion) {
             });
         });
 
-        group.bench_with_input(BenchmarkId::new("batch_multi_get", size), &subset, |b, ids| {
-            b.iter(|| {
-                let _ = indexer.query_accounts(ids).unwrap();
-            });
-        });
+        group.bench_with_input(
+            BenchmarkId::new("batch_multi_get", size),
+            &subset,
+            |b, ids| {
+                b.iter(|| {
+                    let _ = indexer.query_accounts(ids).unwrap();
+                });
+            },
+        );
     }
     group.finish();
 }
@@ -49,7 +53,9 @@ fn bench_pagination(c: &mut Criterion) {
         let caller = [1u8; 32];
         group.bench_with_input(BenchmarkId::new("page_size_10", blocks), &blocks, |b, _| {
             b.iter(|| {
-                let _ = indexer.query_transactions_by_account(&caller, &acc, None, 10, true).unwrap();
+                let _ = indexer
+                    .query_transactions_by_account(&caller, &acc, None, 10, true)
+                    .unwrap();
             });
         });
     }

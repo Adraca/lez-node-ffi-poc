@@ -1,5 +1,5 @@
+use parking_lot::RwLock;
 use std::collections::HashSet;
-use std::sync::RwLock;
 
 /// Represents an authorized caller ID (32-byte public key or zone hash).
 pub type CallerId = [u8; 32];
@@ -33,13 +33,13 @@ impl PolicyEngine {
 
     /// Grants admin privilege to a specific caller ID.
     pub fn grant_admin(&self, caller: &CallerId) {
-        let mut set = self.admin_callers.write().unwrap();
+        let mut set = self.admin_callers.write();
         set.insert(*caller);
     }
 
     /// Revokes admin privilege from a caller ID.
     pub fn revoke_admin(&self, caller: &CallerId) {
-        let mut set = self.admin_callers.write().unwrap();
+        let mut set = self.admin_callers.write();
         set.remove(caller);
     }
 
@@ -52,7 +52,7 @@ impl PolicyEngine {
         match action {
             Action::QueryRead => true,
             Action::AdminStart | Action::AdminStop | Action::AdminReset => {
-                let set = self.admin_callers.read().unwrap();
+                let set = self.admin_callers.read();
                 set.contains(caller)
             }
         }

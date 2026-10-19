@@ -1,16 +1,19 @@
+use crate::core::policy::PolicyEngine;
+use crate::core::status::OperationStatus;
+use crate::core::types::FfiChainTip;
+use crate::storage::cursors::CursorManager;
+use crate::storage::subscriptions::SubscriptionManager;
+use crate::storage::RocksStore;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use crate::core::policy::PolicyEngine;
-use crate::core::status::OperationStatus;
-use crate::storage::cursors::CursorManager;
-use crate::storage::RocksStore;
 
 /// Core indexer instance managing storage, authorization policy, and active cursors.
 pub struct LezIndexer {
     pub store: Arc<RocksStore>,
     pub policy: Arc<PolicyEngine>,
     pub cursors: Arc<CursorManager>,
+    pub subscriptions: Arc<SubscriptionManager>,
     pub running: AtomicBool,
 }
 
@@ -21,6 +24,7 @@ impl LezIndexer {
             store: Arc::new(store),
             policy: Arc::new(PolicyEngine::new()),
             cursors: Arc::new(CursorManager::new()),
+            subscriptions: Arc::new(SubscriptionManager::new()),
             running: AtomicBool::new(true),
         })
     }
@@ -48,5 +52,10 @@ impl LezIndexer {
     /// Explicitly frees a cursor token registered to the given caller.
     pub fn free_cursor(&self, caller: &[u8; 32], cursor: &str) -> OperationStatus {
         self.cursors.free_cursor(cursor, caller)
+    }
+
+    /// Dispatches a finalized block notification to all active subscribers.
+    pub fn notify_finalized_block(&self, tip: &FfiChainTip) {
+        self.subscriptions.notify_finalized_block(tip);
     }
 }

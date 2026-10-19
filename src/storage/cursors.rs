@@ -1,11 +1,14 @@
-use std::collections::HashMap;
-use std::sync::RwLock;
-use std::time::{Duration, Instant};
 use crate::core::policy::CallerId;
 use crate::core::status::OperationStatus;
+use parking_lot::RwLock;
+use std::collections::{BTreeMap, HashMap};
+use std::time::{Duration, Instant};
 
 /// Default maximum number of concurrent active cursors retained in memory (Audit finding 1).
 pub const DEFAULT_MAX_CURSORS: usize = 10_000;
+
+/// Default maximum number of active cursors any single caller may hold.
+pub const DEFAULT_MAX_CURSORS_PER_CALLER: usize = 1_000;
 
 /// Default time-to-live for pagination cursors (5 minutes).
 pub const DEFAULT_CURSOR_TTL: Duration = Duration::from_secs(300);
@@ -21,11 +24,40 @@ pub struct CursorState {
     pub created_at: Instant,
 }
 
+struct Registry {
+    /// token -> (creation id, state)
+    tokens: HashMap<String, (u64, CursorState)>,
+    /// creation id -> token, oldest first (ids are monotonic, so this is creation order)
+    order: BTreeMap<u64, String>,
+    /// caller -> (creation id -> token), for the per-caller cap
+    per_caller: HashMap<CallerId, BTreeMap<u64, String>>,
+    next_id: u64,
+}
+
+impl Registry {
+    fn remove(&mut self, token: &str) -> Option<CursorState> {
+        let (id, state) = self.tokens.remove(token)?;
+        self.order.remove(&id);
+        if let Some(set) = self.per_caller.get_mut(&state.caller_id) {
+            set.remove(&id);
+            if set.is_empty() {
+                self.per_caller.remove(&state.caller_id);
+            }
+        }
+        Some(state)
+    }
+}
+
+/// Server-side cursor registry.
+///
+/// Every operation is O(log n): expiry pops from the front of the creation-ordered index, so
+/// minting a cursor never scans the whole registry. Each caller has its own cap, so one caller
+/// paging heavily evicts only its own oldest cursors, never another caller's (F#66, Privacy #4).
 pub struct CursorManager {
-    tokens: RwLock<HashMap<String, CursorState>>,
-    nonce: RwLock<u64>,
+    inner: RwLock<Registry>,
     ttl: Duration,
     max_cursors: usize,
+    max_per_caller: usize,
 }
 
 impl Default for CursorManager {
@@ -36,53 +68,99 @@ impl Default for CursorManager {
 
 impl CursorManager {
     pub fn new() -> Self {
-        Self::with_config(DEFAULT_MAX_CURSORS, DEFAULT_CURSOR_TTL)
+        Self::with_limits(
+            DEFAULT_MAX_CURSORS,
+            DEFAULT_MAX_CURSORS_PER_CALLER,
+            DEFAULT_CURSOR_TTL,
+        )
     }
 
+    /// Total cap and TTL; the per-caller cap equals the total cap.
     pub fn with_config(max_cursors: usize, ttl: Duration) -> Self {
+        Self::with_limits(max_cursors, max_cursors, ttl)
+    }
+
+    pub fn with_limits(max_cursors: usize, max_per_caller: usize, ttl: Duration) -> Self {
         Self {
-            tokens: RwLock::new(HashMap::new()),
-            nonce: RwLock::new(1),
+            inner: RwLock::new(Registry {
+                tokens: HashMap::new(),
+                order: BTreeMap::new(),
+                per_caller: HashMap::new(),
+                next_id: 1,
+            }),
             ttl,
-            max_cursors,
+            max_cursors: max_cursors.max(1),
+            max_per_caller: max_per_caller.max(1),
         }
     }
 
     /// Returns the number of currently active cursors in memory.
     pub fn count(&self) -> usize {
-        self.tokens.read().unwrap().len()
+        self.inner.read().tokens.len()
     }
 
     /// Creates an opaque cursor token registered to the specific caller (F#66).
-    /// Performs TTL expiration and max-count LRU/FIFO eviction (Audit finding 1).
+    /// Expires stale cursors, then enforces the per-caller cap and the total cap,
+    /// evicting oldest first (Audit finding 1).
     pub fn create_token(&self, mut state: CursorState) -> String {
-        let mut nonce = self.nonce.write().unwrap();
-        let id = *nonce;
-        *nonce += 1;
+        let mut reg = self.inner.write();
+        let now = Instant::now();
 
+        // 1. Expire from the oldest end only; stop at the first live cursor.
+        while let Some((_, tok)) = reg.order.first_key_value() {
+            let tok = tok.clone();
+            let expired = reg
+                .tokens
+                .get(&tok)
+                .map(|(_, s)| now.duration_since(s.created_at) >= self.ttl)
+                .unwrap_or(true);
+            if !expired {
+                break;
+            }
+            reg.remove(&tok);
+        }
+
+        // 2. Per-caller cap: evict this caller's own oldest cursors.
+        while reg.per_caller.get(&state.caller_id).map_or(0, |s| s.len()) >= self.max_per_caller {
+            let oldest = reg
+                .per_caller
+                .get(&state.caller_id)
+                .and_then(|s| s.first_key_value())
+                .map(|(_, t)| t.clone());
+            match oldest {
+                Some(t) => {
+                    reg.remove(&t);
+                }
+                None => break,
+            }
+        }
+
+        // 3. Total cap: evict globally oldest.
+        while reg.tokens.len() >= self.max_cursors {
+            let oldest = reg.order.first_key_value().map(|(_, t)| t.clone());
+            match oldest {
+                Some(t) => {
+                    reg.remove(&t);
+                }
+                None => break,
+            }
+        }
+
+        let id = reg.next_id;
+        reg.next_id += 1;
         let token = format!(
             "cur_{}_{:016x}",
             if state.oldest_first { "asc" } else { "desc" },
             id
         );
-        state.created_at = Instant::now();
-
-        let mut map = self.tokens.write().unwrap();
-        let now = Instant::now();
-
-        // 1. Evict expired cursors
-        map.retain(|_, s| now.duration_since(s.created_at) < self.ttl);
-
-        // 2. Max-count eviction: drop oldest cursors if exceeding capacity limit
-        while map.len() >= self.max_cursors {
-            if let Some(oldest_token) = map.iter().min_by_key(|(_, s)| s.created_at).map(|(k, _)| k.clone()) {
-                map.remove(&oldest_token);
-            } else {
-                break;
-            }
-        }
-
-        map.insert(token.clone(), state);
+        state.created_at = now;
+        let caller = state.caller_id;
+        reg.order.insert(id, token.clone());
+        reg.per_caller
+            .entry(caller)
+            .or_default()
+            .insert(id, token.clone());
+        reg.tokens.insert(token.clone(), (id, state));
         token
     }
 
@@ -93,8 +171,11 @@ impl CursorManager {
         caller_id: &CallerId,
         account_id: &[u8; 32],
     ) -> Result<CursorState, OperationStatus> {
-        let map = self.tokens.read().unwrap();
-        let state = map.get(token).ok_or(OperationStatus::NotFoundCursor)?;
+        let reg = self.inner.read();
+        let (_, state) = reg
+            .tokens
+            .get(token)
+            .ok_or(OperationStatus::NotFoundCursor)?;
 
         // Caller isolation (F#66, Privacy#4): Cannot use another caller's cursor
         if state.caller_id != *caller_id {
@@ -116,15 +197,14 @@ impl CursorManager {
 
     /// Explicitly frees an active cursor token (Audit finding 1).
     pub fn free_cursor(&self, token: &str, caller_id: &CallerId) -> OperationStatus {
-        let mut map = self.tokens.write().unwrap();
-        if let Some(state) = map.get(token) {
-            if state.caller_id != *caller_id {
-                return OperationStatus::PermissionDenied;
+        let mut reg = self.inner.write();
+        match reg.tokens.get(token) {
+            Some((_, state)) if state.caller_id != *caller_id => OperationStatus::PermissionDenied,
+            Some(_) => {
+                reg.remove(token);
+                OperationStatus::Ok
             }
-            map.remove(token);
-            OperationStatus::Ok
-        } else {
-            OperationStatus::NotFoundCursor
+            None => OperationStatus::NotFoundCursor,
         }
     }
 }

@@ -86,13 +86,13 @@ gcc -O2 tests/c/smoke_test.c -Ltarget/release -llez_node_ffi_poc -Wl,-rpath,targ
 
 ## Benchmarks & Coverage
 
-- **Coverage:** **89.58% line coverage** (559/624 lines, 94.12% functions) across the crate via `cargo llvm-cov`.
+- **Coverage:** **61.04% line coverage** (854/1,399 lines) across the crate via `cargo llvm-cov`.
 - **Latency (Criterion, AMD Zen 4):**
-  - Point account query: **~181 ns**
-  - Batch account query ($N=10$): **~2.52 µs** (~252 ns per entity)
-  - Batch account query ($N=100$): **~30.68 µs** (~307 ns per entity)
+  - Point account query: **~164 ns**
+  - Batch account query ($N=10$): **~2.69 µs** (~269 ns per entity)
+  - Batch account query ($N=100$): **~30.12 µs** (~301 ns per entity)
   - Batch read finding: Batch is consistent across multi-key snapshots, not yet faster than N raw single reads in-memory.
-  - Pagination page latency (10 items): **~4.45 µs** (100 txs) / **~5.13 µs** (400 txs)
+  - Pagination page latency (10 items): **~4.41 µs** (100 txs) / **~4.31 µs** (400 txs)
   - Full details in [docs/BENCHMARKS.md](docs/BENCHMARKS.md).
 
 ---

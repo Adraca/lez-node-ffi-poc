@@ -6,8 +6,7 @@ fn main() {
     let out_dir = PathBuf::from(&crate_dir).join("include");
     std::fs::create_dir_all(&out_dir).unwrap();
 
-    let config = cbindgen::Config::from_file("cbindgen.toml")
-        .unwrap_or_default();
+    let config = cbindgen::Config::from_file("cbindgen.toml").unwrap_or_default();
 
     cbindgen::Builder::new()
         .with_crate(crate_dir)

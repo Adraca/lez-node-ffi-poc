@@ -44,6 +44,11 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libclang-dev clang
+
       - name: Install Rust Nightly with Miri
         uses: dtolnay/rust-toolchain@nightly
         with:

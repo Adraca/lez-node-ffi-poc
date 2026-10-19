@@ -11,7 +11,7 @@
 ## 2. Default Access Control Rules
 1. **Administrative Operations Closed by Default (F#67):**
    - Calls to `lez_admin_start_indexer`, `lez_admin_stop_indexer`, and `lez_admin_reset_storage` return
-     `OperationStatus::PermissionDenied` (4) unless the `caller_id` has been explicitly granted the admin role.
+     `OperationStatus::PermissionDenied` (400) unless the `caller_id` has been explicitly granted the admin role.
 2. **Unauthenticated Calls Refused (F#68):**
    - A zeroed caller ID (`[0u8; 32]`) represents an unauthenticated caller and is rejected across all operations
      with `OperationStatus::InvalidArgumentCaller` (200).

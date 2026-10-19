@@ -1,10 +1,11 @@
 pub mod cursors;
 pub mod fixture;
+pub mod subscriptions;
 
+use crate::core::status::OperationStatus;
+use rocksdb::{ColumnFamilyDescriptor, DBWithThreadMode, MultiThreaded, Options};
 use std::path::Path;
 use std::sync::Arc;
-use rocksdb::{ColumnFamilyDescriptor, DBWithThreadMode, MultiThreaded, Options};
-use crate::core::status::OperationStatus;
 
 pub const CF_BLOCK: &str = "cf_block";
 pub const CF_META: &str = "cf_meta";
@@ -38,8 +39,9 @@ impl RocksStore {
         db_opts.create_if_missing(true);
         db_opts.create_missing_column_families(true);
 
-        let db = DBWithThreadMode::<MultiThreaded>::open_cf_descriptors(&db_opts, path, descriptors)
-            .map_err(|_| OperationStatus::BackendFailureStorage)?;
+        let db =
+            DBWithThreadMode::<MultiThreaded>::open_cf_descriptors(&db_opts, path, descriptors)
+                .map_err(|_| OperationStatus::BackendFailureStorage)?;
 
         Ok(Self { db: Arc::new(db) })
     }
@@ -50,6 +52,8 @@ impl RocksStore {
     }
 
     pub fn cf(&self, name: &str) -> Result<Arc<rocksdb::BoundColumnFamily<'_>>, OperationStatus> {
-        self.db.cf_handle(name).ok_or(OperationStatus::BackendFailureStorage)
+        self.db
+            .cf_handle(name)
+            .ok_or(OperationStatus::BackendFailureStorage)
     }
 }

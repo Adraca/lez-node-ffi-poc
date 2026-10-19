@@ -1,7 +1,7 @@
-use std::ffi::{c_char, CString};
-use std::panic::{catch_unwind, AssertUnwindSafe};
 use crate::core::result::PointerResult;
 use crate::core::status::OperationStatus;
+use std::ffi::{c_char, CString};
+use std::panic::{catch_unwind, AssertUnwindSafe};
 
 /// Safely executes an FFI closure, shielding host processes from unwinding panics (F#64).
 pub fn catch_unwind_ffi<T, F>(f: F) -> PointerResult<T>
@@ -23,6 +23,11 @@ where
         Ok(status) => status,
         Err(_) => OperationStatus::PanicCaught,
     }
+}
+
+/// Safely executes an FFI closure returning a value with a default fallback on panic.
+pub fn catch_unwind_default<T: Default, F: FnOnce() -> T>(f: F) -> T {
+    catch_unwind(AssertUnwindSafe(f)).unwrap_or_default()
 }
 
 /// Allocates an owned C string from a Rust string slice.

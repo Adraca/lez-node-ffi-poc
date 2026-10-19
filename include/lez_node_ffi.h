@@ -9,23 +9,47 @@
 #include <stdlib.h>
 
 /**
+ * Maximum number of accounts allowed in a single batch query (Audit finding 9).
+ */
+#define MAX_BATCH_ACCOUNTS 10000
+
+#define LEZ_ABI_VERSION_MAJOR 1
+
+#define LEZ_ABI_VERSION_MINOR 0
+
+#define LEZ_ABI_VERSION_PATCH 0
+
+/**
  * Default maximum number of concurrent active cursors retained in memory (Audit finding 1).
  */
 #define DEFAULT_MAX_CURSORS 10000
 
 /**
- * Typed FFI operation status codes conforming to RFP-027 F#61, F#62.
- * Stable numeric values with an explicit 3-way error distinction:
- * - 100..199: NotFound (state or entity does not exist)
- * - 200..299: InvalidArgument (malformed input or invalid pin/token)
- * - 300..399: BackendFailure (storage I/O, poison, internal faults)
+ * Default maximum number of active cursors any single caller may hold.
  */
-typedef enum {
+#define DEFAULT_MAX_CURSORS_PER_CALLER 1000
+
+/**
+ * Typed FFI operation status codes conforming to RFP-027 F#61, F#62.
+ * Stable numeric values organized into explicit semantic bands:
+ * - 0: Ok (operation succeeded)
+ * - 1..99: Safety & Lifecycle (null pointers, caught panics, ABI mismatch)
+ * - 100..199: NotFound (state or entity does not exist)
+ * - 200..299: InvalidArgument (malformed input, invalid pin/cursor, out-of-bounds limit)
+ * - 300..399: BackendFailure (storage I/O, serialization fault, internal failure)
+ * - 400..499: Unauthorized / Access Control (no grant, unknown caller, revoked grant)
+ * - 500..599: Conflict (duplicate transactions, nonce mismatch, state conflict)
+ */
+enum OperationStatus
+#if __STDC_VERSION__ >= 202311L
+  : uint32_t
+#endif // __STDC_VERSION__ >= 202311L
+ {
     Ok = 0,
     NullPointer = 1,
     PanicCaught = 2,
     Uninitialized = 3,
-    PermissionDenied = 4,
+    AbiMismatch = 4,
     NotFoundAccount = 100,
     NotFoundBlock = 101,
     NotFoundTransaction = 102,
@@ -37,11 +61,24 @@ typedef enum {
     InvalidArgumentBlockPin = 203,
     InvalidArgumentLimit = 204,
     InvalidArgumentGeneric = 205,
+    InvalidArgumentAbiMismatch = 206,
     BackendFailureStorage = 300,
     BackendFailureSerialization = 301,
     BackendFailureLockPoisoned = 302,
     BackendFailureGeneric = 303,
-} OperationStatus;
+    PermissionDenied = 400,
+    UnauthorizedNoGrant = 401,
+    UnauthorizedUnknownCaller = 402,
+    UnauthorizedRevokedGrant = 403,
+    ConflictDuplicateTx = 500,
+    ConflictNonce = 501,
+    ConflictGeneric = 502,
+};
+#if __STDC_VERSION__ >= 202311L
+typedef enum OperationStatus OperationStatus;
+#else
+typedef uint32_t OperationStatus;
+#endif // __STDC_VERSION__ >= 202311L
 
 /**
  * Core indexer instance managing storage, authorization policy, and active cursors.
@@ -53,8 +90,14 @@ typedef LezIndexer LezIndexerHandle;
 /**
  * C-ABI compatible result container (RFP-027 F#58, F#61, F#62).
  *
- * Encapsulates a pointer to the heap-allocated payload and a typed
- * status code. The pointer is guaranteed valid only when `status == OperationStatus::Ok`.
+ * Encapsulates a pointer to the heap-allocated payload and a typed status code.
+ *
+ * ### Ownership & Null Guarantee:
+ * - When `status == OperationStatus::Ok`, `value` is guaranteed non-null and points to a valid,
+ *   heap-allocated payload owned by the caller. The caller is responsible for freeing it with the
+ *   type-paired deallocator (e.g. `lez_free_account`, `lez_free_tx_page`, etc.).
+ * - When `status != OperationStatus::Ok`, `value` is strictly guaranteed to be `NULL` (`ptr::null_mut()`).
+ *   Callers do not need to free `value` on error and must not dereference it.
  */
 typedef struct {
     LezIndexerHandle *value;
@@ -70,8 +113,14 @@ typedef struct {
 /**
  * C-ABI compatible result container (RFP-027 F#58, F#61, F#62).
  *
- * Encapsulates a pointer to the heap-allocated payload and a typed
- * status code. The pointer is guaranteed valid only when `status == OperationStatus::Ok`.
+ * Encapsulates a pointer to the heap-allocated payload and a typed status code.
+ *
+ * ### Ownership & Null Guarantee:
+ * - When `status == OperationStatus::Ok`, `value` is guaranteed non-null and points to a valid,
+ *   heap-allocated payload owned by the caller. The caller is responsible for freeing it with the
+ *   type-paired deallocator (e.g. `lez_free_account`, `lez_free_tx_page`, etc.).
+ * - When `status != OperationStatus::Ok`, `value` is strictly guaranteed to be `NULL` (`ptr::null_mut()`).
+ *   Callers do not need to free `value` on error and must not dereference it.
  */
 typedef struct {
     FfiChainTip *value;
@@ -91,13 +140,20 @@ typedef struct {
     uint64_t balance;
     FfiShard *shards;
     uintptr_t shards_len;
+    uintptr_t shards_cap;
 } FfiAccount;
 
 /**
  * C-ABI compatible result container (RFP-027 F#58, F#61, F#62).
  *
- * Encapsulates a pointer to the heap-allocated payload and a typed
- * status code. The pointer is guaranteed valid only when `status == OperationStatus::Ok`.
+ * Encapsulates a pointer to the heap-allocated payload and a typed status code.
+ *
+ * ### Ownership & Null Guarantee:
+ * - When `status == OperationStatus::Ok`, `value` is guaranteed non-null and points to a valid,
+ *   heap-allocated payload owned by the caller. The caller is responsible for freeing it with the
+ *   type-paired deallocator (e.g. `lez_free_account`, `lez_free_tx_page`, etc.).
+ * - When `status != OperationStatus::Ok`, `value` is strictly guaranteed to be `NULL` (`ptr::null_mut()`).
+ *   Callers do not need to free `value` on error and must not dereference it.
  */
 typedef struct {
     FfiAccount *value;
@@ -112,13 +168,29 @@ typedef struct {
 /**
  * C-ABI compatible result container (RFP-027 F#58, F#61, F#62).
  *
- * Encapsulates a pointer to the heap-allocated payload and a typed
- * status code. The pointer is guaranteed valid only when `status == OperationStatus::Ok`.
+ * Encapsulates a pointer to the heap-allocated payload and a typed status code.
+ *
+ * ### Ownership & Null Guarantee:
+ * - When `status == OperationStatus::Ok`, `value` is guaranteed non-null and points to a valid,
+ *   heap-allocated payload owned by the caller. The caller is responsible for freeing it with the
+ *   type-paired deallocator (e.g. `lez_free_account`, `lez_free_tx_page`, etc.).
+ * - When `status != OperationStatus::Ok`, `value` is strictly guaranteed to be `NULL` (`ptr::null_mut()`).
+ *   Callers do not need to free `value` on error and must not dereference it.
  */
 typedef struct {
     FfiAccountsBatch *value;
     OperationStatus status;
 } PointerResult_FfiAccountsBatch;
+
+/**
+ * Callback invoked when a finalized block is committed (Audit Recommendation 3).
+ *
+ * # Safety
+ * `tip` points to a valid `FfiChainTip` that is borrowed for the duration of the callback.
+ * `user_data` is the opaque pointer passed by the subscriber.
+ * Foreign host callbacks MUST NOT unwind or throw exceptions across the FFI boundary.
+ */
+typedef void (*FfiBlockCallback)(const FfiChainTip *tip, void *user_data);
 
 typedef struct {
     uint8_t tx_hash[32];
@@ -136,8 +208,14 @@ typedef struct {
 /**
  * C-ABI compatible result container (RFP-027 F#58, F#61, F#62).
  *
- * Encapsulates a pointer to the heap-allocated payload and a typed
- * status code. The pointer is guaranteed valid only when `status == OperationStatus::Ok`.
+ * Encapsulates a pointer to the heap-allocated payload and a typed status code.
+ *
+ * ### Ownership & Null Guarantee:
+ * - When `status == OperationStatus::Ok`, `value` is guaranteed non-null and points to a valid,
+ *   heap-allocated payload owned by the caller. The caller is responsible for freeing it with the
+ *   type-paired deallocator (e.g. `lez_free_account`, `lez_free_tx_page`, etc.).
+ * - When `status != OperationStatus::Ok`, `value` is strictly guaranteed to be `NULL` (`ptr::null_mut()`).
+ *   Callers do not need to free `value` on error and must not dereference it.
  */
 typedef struct {
     FfiTxPage *value;
@@ -147,13 +225,28 @@ typedef struct {
 /**
  * C-ABI compatible result container (RFP-027 F#58, F#61, F#62).
  *
- * Encapsulates a pointer to the heap-allocated payload and a typed
- * status code. The pointer is guaranteed valid only when `status == OperationStatus::Ok`.
+ * Encapsulates a pointer to the heap-allocated payload and a typed status code.
+ *
+ * ### Ownership & Null Guarantee:
+ * - When `status == OperationStatus::Ok`, `value` is guaranteed non-null and points to a valid,
+ *   heap-allocated payload owned by the caller. The caller is responsible for freeing it with the
+ *   type-paired deallocator (e.g. `lez_free_account`, `lez_free_tx_page`, etc.).
+ * - When `status != OperationStatus::Ok`, `value` is strictly guaranteed to be `NULL` (`ptr::null_mut()`).
+ *   Callers do not need to free `value` on error and must not dereference it.
  */
 typedef struct {
     char *value;
     OperationStatus status;
 } PointerResult_c_char;
+
+/**
+ * Represents semantic ABI version metadata (Audit finding 5).
+ */
+typedef struct {
+    uint32_t major;
+    uint32_t minor;
+    uint32_t patch;
+} FfiAbiVersion;
 
 /**
  * F#67: Administrative start_indexer, closed by default.
@@ -191,11 +284,12 @@ OperationStatus lez_admin_grant(LezIndexerHandle *handle,
 
 /**
  * Opens or creates a LEZ indexer instance at `db_path`.
+ * Rejects callers with mismatched major ABI version (Audit finding 5).
  *
  * # Safety
  * `db_path` must be a valid, null-terminated C string pointing to a filesystem path.
  */
-PointerResult_LezIndexerHandle lez_indexer_create(const char *db_path);
+PointerResult_LezIndexerHandle lez_indexer_create(const char *db_path, uint32_t expected_abi_major);
 
 /**
  * Frees a LEZ indexer instance handle.
@@ -238,6 +332,10 @@ PointerResult_FfiAccount lez_query_account_at_block(LezIndexerHandle *handle,
 /**
  * Batch queries multiple accounts at once.
  *
+ * # Bounds & Limits:
+ * `count` must be <= `MAX_BATCH_ACCOUNTS` (10,000). Exceeding this limit returns
+ * `OperationStatus::InvalidArgumentLimit` with `value == NULL` to protect host memory against unbounded allocations.
+ *
  * # Safety
  * `handle` must point to an open indexer. `caller_ptr` must point to a 32-byte address.
  * `accounts_ptr` must point to `count * 32` contiguous bytes.
@@ -246,6 +344,44 @@ PointerResult_FfiAccountsBatch lez_query_accounts(LezIndexerHandle *handle,
                                                   const uint8_t *caller_ptr,
                                                   const uint8_t *accounts_ptr,
                                                   uintptr_t count);
+
+/**
+ * Subscribes to finalized block events starting from `from_anchor` (Audit Recommendation 3).
+ *
+ * # Returns:
+ * Returns a non-zero unique subscription ID on success, or 0 on error (e.g. unauthenticated, null pointer).
+ *
+ * # Safety
+ * `handle` must point to an open indexer. `caller_ptr` must point to 32 bytes.
+ * `callback` must be a valid extern "C" function pointer and must NOT throw C++ exceptions or unwind.
+ */
+uint64_t lez_subscribe_finalized_blocks(LezIndexerHandle *handle,
+                                        const uint8_t *caller_ptr,
+                                        uint64_t from_anchor,
+                                        FfiBlockCallback callback,
+                                        void *user_data);
+
+/**
+ * Unsubscribes an active finalized-block subscription.
+ * Enforces caller isolation: only the caller that created the subscription can unsubscribe it.
+ *
+ * # Safety
+ * `handle` must point to an open indexer. `caller_ptr` must point to 32 bytes.
+ */
+OperationStatus lez_unsubscribe(LezIndexerHandle *handle,
+                                const uint8_t *caller_ptr,
+                                uint64_t subscription_id);
+
+/**
+ * Dispatches a finalized block notification to active subscribers (used by ingestion threads).
+ *
+ * # Safety
+ * `handle` must point to an open indexer. `hash_ptr` must point to 32 bytes.
+ */
+OperationStatus lez_notify_block_ingest(LezIndexerHandle *handle,
+                                        uint64_t height,
+                                        const uint8_t *hash_ptr,
+                                        uint64_t timestamp);
 
 /**
  * Queries historical transaction digests for an account with pagination.
@@ -272,6 +408,13 @@ PointerResult_c_char lez_query_schema(LezIndexerHandle *handle, const uint8_t *c
 /**
  * Explicitly frees an active cursor token registered to the caller (Audit finding 1).
  *
+ * # Ownership & Free Ordering Protocol:
+ * - This function unregisters the server-side cursor state registered to the caller in `CursorManager`.
+ * - It borrows `cursor` (as `*const c_char`) and DOES NOT deallocate the string memory.
+ * - The string memory is owned by `FfiTxPage` and is deallocated by `lez_free_tx_page`.
+ * - Therefore, if calling this function, it MUST be called BEFORE `lez_free_tx_page(page)`.
+ *   Calling `lez_free_cursor` after `lez_free_tx_page` passes a dangling pointer and triggers UB.
+ *
  * # Safety
  * If `cursor` is non-null, it must point to a valid null-terminated C string.
  * Passing NULL for `cursor` or `handle` is safe and a no-op.
@@ -289,36 +432,36 @@ OperationStatus lez_free_cursor(LezIndexerHandle *handle,
 void lez_free_string(char *ptr);
 
 /**
- * Frees an FfiAccount and its internal shard array.
+ * Frees an FfiAccount and its internal shard array and shard payloads.
  *
  * # Safety
  * If `ptr` is non-null, it must have been allocated by lez-node-ffi-poc. Passing NULL is safe and a no-op.
+ * Interior shards must not be freed individually; calling this function deallocates all shards.
  */
 void lez_free_account(FfiAccount *ptr);
 
 /**
- * Frees an FfiAccountsBatch.
+ * Frees an FfiAccountsBatch and all interior accounts, shard arrays, and shard buffers.
  *
  * # Safety
  * If `ptr` is non-null, it must have been allocated by lez-node-ffi-poc. Passing NULL is safe and a no-op.
+ * Do not pass individual account pointers from within the batch to `lez_free_account`.
  */
 void lez_free_accounts_batch(FfiAccountsBatch *ptr);
 
 /**
- * Frees an FfiTxPage.
+ * Frees an FfiTxPage and its internal items and next_cursor string.
+ *
+ * # Ownership & Ordering Protocol:
+ * - `FfiTxPage` owns the heap allocation of `next_cursor` and deallocates it here.
+ * - `lez_free_cursor` releases the server-side active cursor registration in the indexer and borrows the cursor string.
+ * - Therefore, if `lez_free_cursor` is called to release server-side cursor state early, it MUST be called
+ *   BEFORE `lez_free_tx_page`. Calling `lez_free_cursor` after `lez_free_tx_page` dereferences a dangling pointer.
  *
  * # Safety
  * If `ptr` is non-null, it must have been allocated by lez-node-ffi-poc. Passing NULL is safe and a no-op.
  */
 void lez_free_tx_page(FfiTxPage *ptr);
-
-/**
- * Frees an FfiShard.
- *
- * # Safety
- * If `ptr` is non-null, it must have been allocated by lez-node-ffi-poc. Passing NULL is safe and a no-op.
- */
-void lez_free_shard(FfiShard *ptr);
 
 /**
  * Frees an FfiChainTip.
@@ -327,5 +470,10 @@ void lez_free_shard(FfiShard *ptr);
  * If `ptr` is non-null, it must have been allocated by lez-node-ffi-poc. Passing NULL is safe and a no-op.
  */
 void lez_free_chain_tip(FfiChainTip *ptr);
+
+/**
+ * Returns the current runtime ABI version (Audit finding 5).
+ */
+FfiAbiVersion lez_abi_version(void);
 
 #endif  /* LEZ_NODE_FFI_POC_H */
