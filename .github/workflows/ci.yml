@@ -1,0 +1,97 @@
+name: CI Quality Gates
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  test-and-lint:
+    name: Test & Lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libclang-dev clang valgrind
+
+      - name: Install Rust Stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Cargo fmt check
+        run: cargo fmt --all -- --check
+
+      - name: Cargo clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Cargo test
+        run: cargo test --all-targets --verbose
+
+  miri:
+    name: Miri Core Verification
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust Nightly with Miri
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: miri
+
+      - name: Run Miri on FFI Core
+        run: cargo +nightly miri test --test test_ffi_core
+
+  valgrind:
+    name: C Smoke Test & Valgrind Leak Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libclang-dev clang valgrind gcc
+
+      - name: Install Rust Stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build cdylib
+        run: cargo build --release
+
+      - name: Compile and run C smoke test under Valgrind
+        run: |
+          gcc -O2 tests/c/smoke_test.c \
+            -Ltarget/release -llez_node_ffi_poc \
+            -Wl,-rpath,target/release \
+            -Iinclude -o target/release/c_smoke_test
+          valgrind --error-exitcode=1 --leak-check=full target/release/c_smoke_test
+
+  asan-smoke:
+    name: ASan / UBSan C Smoke Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libclang-dev clang
+
+      - name: Install Rust Stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Run ASan smoke test script
+        run: ./scripts/run_asan_smoke.sh

@@ -1,0 +1,34 @@
+{
+  "$schema": "https://specs.logos.co/capability-policy-v1.json",
+  "version": "1.0.0",
+  "comment": "Reference capability grant policy for RFP-027 LEZ Node FFI (F#65, F#67)",
+  "upstream_dependency": "logos-blockchain/logos-capability-module#37",
+  "default_mode": "closed_admin_open_read",
+  "roles": {
+    "public_reader": {
+      "allowed_actions": [
+        "lez_query_chain_tip",
+        "lez_query_account",
+        "lez_query_account_at_block",
+        "lez_query_accounts",
+        "lez_query_transactions_by_account",
+        "lez_query_schema"
+      ]
+    },
+    "operator_admin": {
+      "inherits": "public_reader",
+      "allowed_actions": [
+        "lez_admin_start_indexer",
+        "lez_admin_stop_indexer",
+        "lez_admin_reset_storage",
+        "lez_admin_grant"
+      ]
+    }
+  },
+  "grants": [
+    {
+      "caller_id": "0101010101010101010101010101010101010101010101010101010101010101",
+      "role": "operator_admin"
+    }
+  ]
+}
