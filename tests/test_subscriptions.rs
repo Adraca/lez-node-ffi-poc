@@ -249,3 +249,109 @@ fn test_fixture_ingest_thread_parallel_dispatch() {
         lez_indexer_free(handle);
     }
 }
+
+#[test]
+fn test_subscription_null_handle_and_unsubscribe_twice() {
+    // Priority 3: Unknown handle, unsubscribe twice, delivery after unsubscribe never happens
+    let dir = tempdir().unwrap();
+    let dir_c = CString::new(dir.path().to_str().unwrap()).unwrap();
+    let res = unsafe { lez_indexer_create(dir_c.as_ptr(), LEZ_ABI_VERSION_MAJOR) };
+    assert_eq!(res.status, OperationStatus::Ok);
+    let handle = res.value;
+
+    let caller = [0x77; 32];
+    let other_caller = [0x66; 32];
+    let ctx = Arc::new(CallerContext {
+        deliveries: AtomicU64::new(0),
+        last_height: AtomicU64::new(0),
+    });
+
+    unsafe {
+        // 1. Unknown / NULL handle safety
+        assert_eq!(
+            lez_subscribe_finalized_blocks(
+                std::ptr::null_mut(),
+                caller.as_ptr(),
+                1,
+                Some(test_callback),
+                Arc::as_ptr(&ctx) as *mut c_void,
+            ),
+            0
+        );
+        assert_eq!(
+            lez_unsubscribe(std::ptr::null_mut(), caller.as_ptr(), 1),
+            OperationStatus::NullPointer
+        );
+        let hash = [0x55; 32];
+        assert_eq!(
+            lez_notify_block_ingest(std::ptr::null_mut(), 1, hash.as_ptr(), 100),
+            OperationStatus::NullPointer
+        );
+
+        // Null callback or null caller returns 0
+        assert_eq!(
+            lez_subscribe_finalized_blocks(
+                handle,
+                caller.as_ptr(),
+                1,
+                None,
+                Arc::as_ptr(&ctx) as *mut c_void,
+            ),
+            0
+        );
+        assert_eq!(
+            lez_subscribe_finalized_blocks(
+                handle,
+                std::ptr::null(),
+                1,
+                Some(test_callback),
+                Arc::as_ptr(&ctx) as *mut c_void,
+            ),
+            0
+        );
+
+        // 2. Subscribe successfully
+        let sub_id = lez_subscribe_finalized_blocks(
+            handle,
+            caller.as_ptr(),
+            1,
+            Some(test_callback),
+            Arc::as_ptr(&ctx) as *mut c_void,
+        );
+        assert!(sub_id > 0);
+
+        // Deliver 1 block
+        assert_eq!(
+            lez_notify_block_ingest(handle, 1, hash.as_ptr(), 101),
+            OperationStatus::Ok
+        );
+        assert_eq!(ctx.deliveries.load(Ordering::SeqCst), 1);
+
+        // Wrong caller cannot unsubscribe
+        assert_eq!(
+            lez_unsubscribe(handle, other_caller.as_ptr(), sub_id),
+            OperationStatus::PermissionDenied
+        );
+
+        // 3. First unsubscribe succeeds
+        assert_eq!(
+            lez_unsubscribe(handle, caller.as_ptr(), sub_id),
+            OperationStatus::Ok
+        );
+
+        // 4. Unsubscribe twice returns NotFoundGeneric
+        assert_eq!(
+            lez_unsubscribe(handle, caller.as_ptr(), sub_id),
+            OperationStatus::NotFoundGeneric
+        );
+
+        // 5. Ingest subsequent block: delivery after unsubscribe NEVER happens
+        assert_eq!(
+            lez_notify_block_ingest(handle, 2, hash.as_ptr(), 102),
+            OperationStatus::Ok
+        );
+        assert_eq!(ctx.deliveries.load(Ordering::SeqCst), 1); // Stays at 1!
+
+        lez_indexer_free(handle);
+    }
+}

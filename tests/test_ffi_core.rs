@@ -32,21 +32,36 @@ fn test_operation_status_bands() {
     assert!(!backend_fail.is_conflict());
     assert_eq!(backend_fail as u32, 300);
 
-    let unauthorized = OperationStatus::PermissionDenied;
-    assert!(unauthorized.is_unauthorized());
-    assert!(!unauthorized.is_not_found());
-    assert!(!unauthorized.is_invalid_argument());
-    assert!(!unauthorized.is_backend_failure());
-    assert!(!unauthorized.is_conflict());
-    assert_eq!(unauthorized as u32, 400);
+    // 400.. band checks
+    let unauthorized_codes = [
+        OperationStatus::PermissionDenied,
+        OperationStatus::UnauthorizedNoGrant,
+        OperationStatus::UnauthorizedUnknownCaller,
+        OperationStatus::UnauthorizedRevokedGrant,
+    ];
+    for (i, code) in unauthorized_codes.iter().enumerate() {
+        assert!(code.is_unauthorized());
+        assert!(!code.is_not_found());
+        assert!(!code.is_invalid_argument());
+        assert!(!code.is_backend_failure());
+        assert!(!code.is_conflict());
+        assert_eq!(*code as u32, 400 + i as u32);
+    }
 
-    let conflict = OperationStatus::ConflictDuplicateTx;
-    assert!(conflict.is_conflict());
-    assert!(!conflict.is_not_found());
-    assert!(!conflict.is_invalid_argument());
-    assert!(!conflict.is_backend_failure());
-    assert!(!conflict.is_unauthorized());
-    assert_eq!(conflict as u32, 500);
+    // 500.. band checks
+    let conflict_codes = [
+        OperationStatus::ConflictDuplicateTx,
+        OperationStatus::ConflictNonce,
+        OperationStatus::ConflictGeneric,
+    ];
+    for (i, code) in conflict_codes.iter().enumerate() {
+        assert!(code.is_conflict());
+        assert!(!code.is_not_found());
+        assert!(!code.is_invalid_argument());
+        assert!(!code.is_backend_failure());
+        assert!(!code.is_unauthorized());
+        assert_eq!(*code as u32, 500 + i as u32);
+    }
 }
 
 #[test]
@@ -106,17 +121,37 @@ fn test_null_pointer_safety_behavior() {
 #[test]
 fn test_pointer_result_null_on_error_guarantee() {
     // Audit Finding 4: Guarantee value == NULL whenever status != Ok
-    let err_statuses = [
+    let all_err_statuses = [
         OperationStatus::NullPointer,
         OperationStatus::PanicCaught,
         OperationStatus::Uninitialized,
-        OperationStatus::PermissionDenied,
+        OperationStatus::AbiMismatch,
         OperationStatus::NotFoundAccount,
+        OperationStatus::NotFoundBlock,
+        OperationStatus::NotFoundTransaction,
+        OperationStatus::NotFoundCursor,
+        OperationStatus::NotFoundGeneric,
+        OperationStatus::InvalidArgumentCaller,
+        OperationStatus::InvalidArgumentAccount,
         OperationStatus::InvalidArgumentCursor,
+        OperationStatus::InvalidArgumentBlockPin,
+        OperationStatus::InvalidArgumentLimit,
+        OperationStatus::InvalidArgumentGeneric,
+        OperationStatus::InvalidArgumentAbiMismatch,
         OperationStatus::BackendFailureStorage,
+        OperationStatus::BackendFailureSerialization,
+        OperationStatus::BackendFailureLockPoisoned,
+        OperationStatus::BackendFailureGeneric,
+        OperationStatus::PermissionDenied,
+        OperationStatus::UnauthorizedNoGrant,
+        OperationStatus::UnauthorizedUnknownCaller,
+        OperationStatus::UnauthorizedRevokedGrant,
+        OperationStatus::ConflictDuplicateTx,
+        OperationStatus::ConflictNonce,
+        OperationStatus::ConflictGeneric,
     ];
 
-    for status in err_statuses {
+    for status in all_err_statuses {
         let res: PointerResult<FfiAccount> = PointerResult::from_error(status);
         assert_eq!(res.status, status);
         assert!(
@@ -124,6 +159,7 @@ fn test_pointer_result_null_on_error_guarantee() {
             "value must be NULL on error status {:?}",
             status
         );
+        assert!(!res.status.is_ok());
     }
 
     let null_res: PointerResult<FfiAccount> = PointerResult::null_pointer();
@@ -133,6 +169,28 @@ fn test_pointer_result_null_on_error_guarantee() {
     let panic_res: PointerResult<FfiAccount> = PointerResult::panic_caught();
     assert_eq!(panic_res.status, OperationStatus::PanicCaught);
     assert!(panic_res.value.is_null());
+}
+
+#[test]
+fn test_empty_batch_free_miri() {
+    use lez_node_ffi_poc::core::types::{lez_free_accounts_batch, FfiAccountsBatch};
+
+    // 1. Completely null/empty batch
+    let batch_null = Box::into_raw(Box::new(FfiAccountsBatch {
+        accounts: std::ptr::null_mut(),
+        count: 0,
+    }));
+    unsafe { lez_free_accounts_batch(batch_null) };
+
+    // 2. Batch with 0 count and non-null dangling slice pointer
+    let accounts: Vec<FfiAccount> = Vec::new();
+    let boxed_slice = accounts.into_boxed_slice();
+    let ptr = Box::into_raw(boxed_slice) as *mut FfiAccount;
+    let batch_zero = Box::into_raw(Box::new(FfiAccountsBatch {
+        accounts: ptr,
+        count: 0,
+    }));
+    unsafe { lez_free_accounts_batch(batch_zero) };
 }
 
 #[test]

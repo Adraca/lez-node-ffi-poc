@@ -86,7 +86,7 @@ gcc -O2 tests/c/smoke_test.c -Ltarget/release -llez_node_ffi_poc -Wl,-rpath,targ
 
 ## Benchmarks & Coverage
 
-- **Coverage:** **61.04% line coverage** (854/1,399 lines) across the crate via `cargo llvm-cov`.
+- **Coverage:** **66.22% line coverage** (939/1,418 lines, 58.27% functions [81/139], 68.51% regions [1,477/2,156]) across 36 integration & unit tests via `cargo llvm-cov`.
 - **Latency (Criterion, AMD Zen 4):**
   - Point account query: **~164 ns**
   - Batch account query ($N=10$): **~2.69 µs** (~269 ns per entity)

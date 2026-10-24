@@ -74,6 +74,18 @@ fn test_admin_policy_closed_by_default_and_grant_flow() {
         .policy
         .check_permission(&unpriv_caller, Action::AdminStart));
 
+    // Revoke admin from admin_caller (Priority 7)
+    indexer.policy.revoke_admin(&admin_caller);
+    assert!(!indexer
+        .policy
+        .check_permission(&admin_caller, Action::AdminStart));
+    assert!(!indexer
+        .policy
+        .check_permission(&admin_caller, Action::AdminStop));
+    assert!(!indexer
+        .policy
+        .check_permission(&admin_caller, Action::AdminReset));
+
     // Zeroed caller rejected across the board (unauthenticated)
     let zero_caller = [0u8; 32];
     assert!(!indexer

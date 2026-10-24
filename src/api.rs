@@ -196,9 +196,13 @@ pub unsafe extern "C" fn lez_query_accounts(
         if !indexer.policy.check_permission(&caller, Action::QueryRead) {
             return PointerResult::from_error(OperationStatus::PermissionDenied);
         }
-        let raw_slice = unsafe { std::slice::from_raw_parts(accounts_ptr, count * 32) };
-        let (chunks, _) = raw_slice.as_chunks::<32>();
-        let ids: Vec<[u8; 32]> = chunks.to_vec();
+        let ids: Vec<[u8; 32]> = if count == 0 {
+            Vec::new()
+        } else {
+            let raw_slice = unsafe { std::slice::from_raw_parts(accounts_ptr, count * 32) };
+            let (chunks, _) = raw_slice.as_chunks::<32>();
+            chunks.to_vec()
+        };
         match indexer.query_accounts(&ids) {
             Ok(batch) => PointerResult::from_value(batch),
             Err(st) => PointerResult::from_error(st),

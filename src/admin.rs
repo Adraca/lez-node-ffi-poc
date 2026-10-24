@@ -115,3 +115,29 @@ pub unsafe extern "C" fn lez_admin_grant(
         OperationStatus::Ok
     })
 }
+
+/// Revokes administrative access from a designated caller.
+///
+/// # Safety
+/// `handle` must point to an open indexer. `caller_ptr` and `target_ptr` must point to 32-byte addresses.
+#[no_mangle]
+pub unsafe extern "C" fn lez_admin_revoke(
+    handle: *mut LezIndexerHandle,
+    caller_ptr: *const u8,
+    target_ptr: *const u8,
+) -> OperationStatus {
+    catch_unwind_status(|| {
+        if handle.is_null() || target_ptr.is_null() {
+            return OperationStatus::NullPointer;
+        }
+        let _caller = match parse_caller(caller_ptr) {
+            Ok(c) => c,
+            Err(st) => return st,
+        };
+        let mut target = [0u8; 32];
+        target.copy_from_slice(unsafe { std::slice::from_raw_parts(target_ptr, 32) });
+        let indexer = unsafe { &*handle };
+        indexer.policy.revoke_admin(&target);
+        OperationStatus::Ok
+    })
+}

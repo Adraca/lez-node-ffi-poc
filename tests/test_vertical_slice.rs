@@ -60,6 +60,20 @@ fn test_query_account_default_zeroed_and_pinned_reads() {
         .query_account_at_block(&known_acc, 5, &bad_hash)
         .unwrap_err();
     assert_eq!(err, OperationStatus::InvalidArgumentBlockPin);
+
+    // Height above tip returns NotFoundBlock (Priority 5)
+    let err_height = indexer
+        .query_account_at_block(&known_acc, 50, &block_5_hash)
+        .unwrap_err();
+    assert_eq!(err_height, OperationStatus::NotFoundBlock);
+
+    // Unknown account at pinned height returns zeroed account (Priority 5)
+    let unknown_pinned = indexer
+        .query_account_at_block(&unknown_acc, 5, &block_5_hash)
+        .unwrap();
+    assert_eq!(unknown_pinned.account_id, unknown_acc);
+    assert_eq!(unknown_pinned.balance, 0);
+    assert_eq!(unknown_pinned.nonce, 0);
 }
 
 #[test]

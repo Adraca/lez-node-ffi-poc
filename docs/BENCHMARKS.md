@@ -49,11 +49,11 @@ Evaluating 10-item page fetching (`query_transactions_by_account`) across differ
 ## 3. Memory & Leak Verification
 
 - **Miri (`cargo +nightly miri test --test test_ffi_core`):**
-  - Result: 8/8 tests passed with **0 errors, 0 memory leaks, and 0 undefined behavior** instances across the C-ABI memory lifecycle.
+  - Result: 9/9 tests passed with **0 errors, 0 memory leaks, and 0 undefined behavior** instances across the C-ABI memory lifecycle (including nested shard deallocation and empty batch handling).
 - **AddressSanitizer / UndefinedBehaviorSanitizer (`./scripts/run_asan_smoke.sh`):**
   - Native C smoke test compiled with Clang `-fsanitize=address,undefined` linked against cdylib.
-  - Result: **Clean execution, 0 leak detections, 0 undefined behavior events** across all exports, null inputs, and deallocations.
+  - Result: **Clean execution, 0 leak detections, 0 undefined behavior events** across all exports, null inputs, ABI checks, batch limit boundaries, and admin lifecycle.
 - **Valgrind (CI):**
   - On the local AMD Zen 4 development host, glibc 2.44 AVX-512 vectorization (`EVEX 0x62`) triggers known LibVEX decoder limitations in Valgrind 3.25. ASan/UBSan serves as the authoritative local leak check; full Valgrind testing is executed in GitHub Actions CI.
 - **Line Coverage (`cargo llvm-cov`):**
-  - Result: **61.04% line coverage** (854/1,399 lines; 55.47% functions; 62.12% regions). Coverage fell from the earlier 89.6% because the ABI, status-band and subscription code added in the hardening pass is only partly exercised by tests; raising it is tracked work.
+  - Result: **66.22% line coverage** (939/1,418 lines), **58.27% function coverage** (81/139 functions), and **68.51% region coverage** (1,477/2,156 regions) across 36 tests. Raising coverage exercised ABI checks, status code error bands, subscription lifecycles, and cursor eviction boundaries.

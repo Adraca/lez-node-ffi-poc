@@ -200,6 +200,10 @@ impl CursorManager {
         let mut reg = self.inner.write();
         match reg.tokens.get(token) {
             Some((_, state)) if state.caller_id != *caller_id => OperationStatus::PermissionDenied,
+            Some((_, state)) if Instant::now().duration_since(state.created_at) >= self.ttl => {
+                reg.remove(token);
+                OperationStatus::NotFoundCursor
+            }
             Some(_) => {
                 reg.remove(token);
                 OperationStatus::Ok

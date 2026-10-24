@@ -283,6 +283,16 @@ OperationStatus lez_admin_grant(LezIndexerHandle *handle,
                                 const uint8_t *target_ptr);
 
 /**
+ * Revokes administrative access from a designated caller.
+ *
+ * # Safety
+ * `handle` must point to an open indexer. `caller_ptr` and `target_ptr` must point to 32-byte addresses.
+ */
+OperationStatus lez_admin_revoke(LezIndexerHandle *handle,
+                                 const uint8_t *caller_ptr,
+                                 const uint8_t *target_ptr);
+
+/**
  * Opens or creates a LEZ indexer instance at `db_path`.
  * Rejects callers with mismatched major ABI version (Audit finding 5).
  *
